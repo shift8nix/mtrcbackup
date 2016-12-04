@@ -1,0 +1,658 @@
+#!/usr/bin/env python3
+#
+# The MIT License (MIT)
+#
+# Copyright (c) 2015, Edgars Simanis.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+# This is free software with ABSOLUTELY NO WARRANTY
+"""
+mtrcbackup 1.0
+This is a small Python3 utility for backing up Mikrotik router configuration
+This is free software with ABSOLUTELY NO WARRANTY
+
+Usage: mtrcbackup [-OPTION] [Arguments]
+
+Option list with arguments:
+
+-h, --help		Print this help message
+
+-a, --add		Add router to data base. Arguments:
+
+				router=STRING	required
+					Router hostname. Must be unique. IP or resolvable hostname
+
+				user=STRING		[admin]
+					User name default Mikrotik - admin
+
+				passwd=STRING	[]
+					Set password default Mikrotik - blank
+
+				usekey=(0|1)	[0]
+					Define ssh access method
+					0 = password access using sshpass utility
+					1 = key based authentication
+
+				interval=(hourly|daily|weekly|monthly)	[hourly]
+					Specify automatic backup frequency
+
+				sshport=INTEGER	[22]
+					Specify custom ssh port
+
+				online=(yes|'')	[]
+					Specify if router must be reachable at this stage
+					If test fails it will not be saved in data base 
+
+--delete		Delete router from database. Argument: hostname
+
+-c, --change		Change router name. Arguments: current_hostname new_hostname
+
+-e, --edit		Edit router settings in data base. For argument reference check
+				-a, --add option above. Allows change of following settings:
+				'user', 'passwd', 'usekey', 'interval', 'sshport'
+
+-l, --list		Print JSON format list of routers and their settings in database
+
+--setup			Set up mtrcbackup. Run once at initial program setup
+
+--auto			Run auto backup. Argument: interval (hourly, daily, weekly, monthly)
+				Intended for cron use 
+
+-b, --backup		Run backup. Arguments: hostname
+
+--check			Check if host reachable. Arguments: hostname
+				Returns code. 0 = reachable
+
+--license		Back up router license file. Arguments: hostname
+
+Example usage:
+
+mtrcbackup --add router=10.0.0.1 user=ed passwd=password123
+	Add router with custom user name and password. Other arguments use defaults.
+
+mtrcbackup --delete 10.0.0.1
+
+mtrcbackup --change 10.0.0.1 10.0.0.100
+	Change router hostname to 10.0.0.100
+
+mtrcbackup --edit router=10.0.0.1 sshport=10022
+	Change ssh port to 10022 for router 10.0.0.1
+
+mtrcbackup --auto daily
+	Run backup for all routers that have interval set to daily
+
+mtrcbackup --check 10.0.0.1
+
+mtrcbackup --license 10.0.0.1
+
+Backups:
+	Program is using Git for storage so use any operating system Git tools to view config changes. 
+"""
+###########################################################################################################
+
+
+class DataBase():
+	"""Data base query methods """
+
+	def __init__(self):
+		"""define SQLite file and connect to d_base"""
+		
+		self.dbf = 'database.sqlite'
+		self.db = sqlite3.connect(self.dbf)
+		self.cursor = self.db.cursor()
+
+		
+	def Update(self, query):
+		"""run query, commit if changes """
+		
+		self.cursor.execute(query)
+		self.db.commit()
+
+	
+	def FetchAll(self, query):
+		"""fetchall function"""
+		
+		self.cursor.execute(query)
+		all_rows = self.cursor.fetchall()
+		return all_rows
+
+		
+	def Info(self, router):
+		"""return router information in dictionary"""					
+	
+		self.cursor.execute('SELECT * FROM inventory WHERE router=?', (router,))
+		column_names = [col[0] for col in self.cursor.description]
+		info = [dict(zip(column_names, row)) for row in self.cursor.fetchall()]
+		return info
+		
+			
+	def __exit__(self):
+		self.db.close()
+		
+###########################################################################################################
+
+
+class Syslog():
+	"""Logging methods""" 
+
+	def __init__(self):
+		""" Define logging options"""
+		
+		syslog.openlog(logoption=syslog.LOG_PID, facility=syslog.LOG_SYSLOG)
+
+		
+	def Info(self, msg):
+		""" info messages """
+		
+		message = "::mtrcbackup::"+msg 
+		syslog.syslog(syslog.LOG_INFO, message)
+		print(msg)
+
+		
+	def Warning(self, msg):
+		""" warning messages """
+		
+		message = "::mtrcbackup::"+msg
+		syslog.syslog(syslog.LOG_WARNING, message)
+		print(msg)
+
+		
+###########################################################################################################
+
+class Router():
+	""" Router object and methods
+	When connecting to router use router subclasses methods
+	for either ssh-key or sshpass """ 
+
+	def __init__(self, info):
+		""" Set attributes from sql query that is passed from menu as 'info' dictionary """
+		
+		for key in info:
+			setattr(self, key, info[key])
+
+
+	def Ping(self):
+		""" Ping method for cases when router does not respond to cli calls,
+		but you want to confirm that it is reachable by ping"""
+		
+		execute = call(["ping", "-c 4", "-W 3",  self.router], stdout=DEVNULL, stderr=DEVNULL, timeout=13)
+		if not execute == 0:
+			return(self.router+"::Ping failed")
+		else:
+			return(self.router+"::Ping working")
+
+			
+	def License(self):
+		""" Back up router license"""
+	
+		# define regex to match license looks like this: MRJQ-ZW7F
+		expr = re.compile('(?<=software-id:\s)(.{4}-.{4})')
+		
+		# get license information from router
+		self.CallSSH("system license output")
+		
+		# extract license number
+		lic_info = expr.findall(self.CheckOutput("system license print").decode())
+		
+		# scp file over from router
+		file_name = lic_info[0]+".key"
+		self.CallSCP(file_name)
+		
+		# Add to version control
+		call(['git', '-C', 'inventory', 'add', self.router+'/'+file_name], stdout=DEVNULL, stderr=DEVNULL)
+		call(['git', '-C', 'inventory', 'commit', '-m license '+self.router], stdout=DEVNULL, stderr=DEVNULL)
+
+		
+	def CheckRouter(self):
+		""" Execute dummy command on router to check connectivity. Return code"""
+		
+		try:
+			return self.CallSSH("nothing")
+		except:
+			return(99)
+
+			
+	def BoardInfo(self):
+		""" Get arch and board info from router. Update data base. """
+		
+		# Regex to match lines needed
+		_arch = re.compile('(?<=architecture-name:\s)(.*)')
+		_board = re.compile('(?<=board-name:\s)(.*)')
+		
+		# Get information from router
+		chk_result = self.CheckOutput("system resource print").decode()
+		
+		# Extract arch and board info
+		arch_result = _arch.findall(chk_result)
+		board_result = _board.findall(chk_result)
+		
+		# Update data base. Strip extra chars from previous strings
+		DataBase.Update("UPDATE inventory SET arch='{0}', board='{1}' WHERE router='{2}'".format(str(arch_result[0]).strip('\r'),str(board_result[0]).strip('\r'),self.router))
+
+
+	def RunBackup(self):
+		""" Method that runs actual backup"""
+		
+		# Set temporary file		
+		tmpfile = "inventory/"+self.router+"/.export.tmp"
+		
+		# Set permanent backup file
+		xportfile = "inventory/"+self.router+"/export.src"
+		
+		# Open temporary file for writing
+		xportaction = open(tmpfile, 'w')
+		
+		# Execute export on router. If result is empty break out with message
+		# Else result is still written to temp file and usable later
+		if not self.CallSSHXPort('export', xportaction) == 0:
+			Syslog.Info(self.router+"::Backup run. Empty Result.")
+			# Diagnose why
+			if not self.CheckRouter() == 0:
+				Syslog.Warning(self.router+"::Failure to communicate")
+				Syslog.Info(self.router.Ping())
+			return(1)
+		
+		# If permanent file already exists. Else continue to writing backup below	
+		if os.path.isfile(xportfile):
+		
+			# Open both files and compare contents omitting first line that contains timestamp
+			with open(tmpfile, "r") as last, open(xportfile, "r") as before:
+				if last.readlines()[1:] == before.readlines()[1:]:
+					Syslog.Info(self.router+"::Backup run. No changes to config.")
+					return(1)
+					
+		# Write backup by changing file names
+		call(["mv", tmpfile, xportfile], stdout=DEVNULL, stderr=DEVNULL)
+		
+		# Add to version control
+		call(['git', '-C', 'inventory', 'add', self.router+'/export.src'], stdout=DEVNULL, stderr=DEVNULL)
+		call(['git', '-C', 'inventory', 'commit', '-m backup '+self.router], stdout=DEVNULL, stderr=DEVNULL)
+		Syslog.Info(self.router+"::New config backup.")
+		
+		# Check if license backed up
+		if not glob.glob("inventory/"+self.router+"/*.key"):	
+			self.License()
+			
+		# Update board arch if empty
+		if self.arch == None or self.board == None:
+			self.BoardInfo()
+		
+		return(0)
+		
+###########################################################################################################
+	
+class SSHConn(Router):
+	"""Subclass implements direct ssh calls if key auth used"""
+	
+ 
+	def CallSSH(self, command):
+		"""subprocess.call execute command via ssh"""
+		
+		return call(['ssh', '-p '+str(self.sshport), self.user+'@'+self.router,"-o StrictHostKeyChecking=no", "-o PasswordAuthentication=no", command],stdout=DEVNULL, stderr=DEVNULL, timeout=12)
+		
+		
+	def CallSSHXPort(self, command, action):
+		"""subprocess.call execute command via ssh with stdout to variable"""
+				
+		return call(['ssh', '-p '+str(self.sshport), self.user+'@'+self.router, "-o StrictHostKeyChecking=no", "-o PasswordAuthentication=no", command], stdout=action, stderr=DEVNULL, timeout=12)
+
+
+	
+	def CallSCP(self, file_name):
+		"""scp file using ssh"""
+		
+		call(['scp', '-P '+str(self.sshport),"-o StrictHostKeyChecking=no", "-o PasswordAuthentication=no", self.user+'@'+self.router+":/"+file_name, "inventory/"+self.router], stdout=DEVNULL, stderr=DEVNULL, timeout=12)
+		
+		
+	def CheckOutput(self, command):
+		"""check_output from subprocess via ssh"""
+		
+		return check_output(['ssh', '-p '+str(self.sshport), self.user+'@'+self.router,"-o StrictHostKeyChecking=no", "-o PasswordAuthentication=no", command], stderr=DEVNULL, timeout=12)	
+	
+	
+###########################################################################################################
+	
+	
+class SSHPass(Router):
+	"""Subclass uses sshpass to call ssh if passwd auth used"""
+
+
+
+	def CallSSH(self, command):
+		"""subprocess.call execute command via sshpass"""
+		
+		return call(['sshpass', '-p', self.passwd, 'ssh', '-p '+str(self.sshport), self.user+'@'+self.router, "-o StrictHostKeyChecking=no", command], stdout=DEVNULL, stderr=DEVNULL, timeout=12)
+		
+		
+	def CallSSHXPort(self, command, action):
+		"""subprocess.call execute command via sshpass with stdout to variable"""
+		
+		return call(['sshpass', '-p', self.passwd, 'ssh', '-p '+str(self.sshport), self.user+'@'+self.router, "-o StrictHostKeyChecking=no", command], stdout=action, stderr=DEVNULL, timeout=12)
+
+	
+
+	def CallSCP(self, file_name):
+		"""scp file using sshpass"""
+		
+		call(['sshpass', '-p', self.passwd, 'scp', '-P '+str(self.sshport), "-o StrictHostKeyChecking=no", self.user+'@'+self.router+":/"+file_name, "inventory/"+self.router], stdout=DEVNULL, stderr=DEVNULL, timeout=12)
+	
+
+	def CheckOutput(self, command):
+		"""check_output from subprocess via sshpass"""
+		
+		return check_output(["sshpass", "-p", self.passwd, "ssh", "-p "+str(self.sshport), self.user+"@"+self.router, "-o StrictHostKeyChecking=no", command], stderr=DEVNULL, timeout=12)
+	
+	
+###########################################################################################################
+
+# Functions
+
+#############
+
+def AddRouter(**kwargs):
+	""" Add router with optional args. Router=hostname required"""
+	
+	# Variables to override with default values
+	router = kwargs['router']
+	user = kwargs.get('user', 'admin')
+	passwd = kwargs.get('passwd', None)
+	usekey = kwargs.get('usekey', 0)
+	interval = kwargs.get('interval', 'hourly')
+	sshport = kwargs.get('sshport', 22)
+	_online = kwargs.get('online', '')
+
+
+	# Create directory and database entry											
+	call(["mkdir", "inventory/"+router], stdout=DEVNULL, stderr=DEVNULL, timeout=3)
+	DataBase.Update("INSERT INTO inventory(router, user, passwd, usekey, interval, sshport) VALUES('{0}', '{1}', '{2}', {3}, '{4}', {5})".format(router, user, passwd, usekey, interval, sshport))
+	
+	# Based on usekey variable init router subclass. Also confirms database operation
+	condition = DataBase.Info(router)[0]
+	new_router = SSHConn(condition) if condition['usekey'] == 1 else SSHPass(condition)
+
+	# If router passes cli dummy check
+	if new_router.CheckRouter() == 0:
+		Syslog.Info(router+"::Added successfully")
+	
+	# Else throw warning and try to ping it
+	else:
+		Syslog.Warning(router+"::Failure to communicate")
+		Syslog.Info(new_router.Ping())
+		
+		# If online argument set to yes remove from database
+		# Else it is added, but currently unreachable
+		if _online == 'yes':
+			DeleteRouter(router)
+			Syslog.Warning(router+"::Removed from DataBase")
+		return
+	
+	
+	
+#############
+
+def DeleteRouter(router):
+	"""Delete router from database and remove subdirectory"""
+	
+	# Remove from database
+	DataBase.Update("DELETE FROM inventory WHERE router='{0}'".format(router)) 
+	
+	# Delete file. If committed to git before: first will remove second will silently fail
+	call(['git', '-C', 'inventory', 'rm', router], stdout=DEVNULL, stderr=DEVNULL)
+	
+	# If not previous command will silently fail and this will remove
+	call(["rm", "-Rf", "inventory/"+router], stdout=DEVNULL, stderr=DEVNULL, timeout=3)
+
+
+
+#############
+
+
+def EditRouter(**kwargs):
+	"""Update router information. This can not change hostname"""
+	
+	# Get router hostname
+	router = kwargs['router']
+	
+	# Loop through keys in dictionary
+	for key, value in kwargs.items():
+	
+		# If key is one of following
+		if key in ('user', 'passwd', 'usekey', 'interval', 'sshport'):
+			# Update data base
+			DataBase.Update("UPDATE inventory SET {0}='{1}' WHERE router='{2}'".format(key, value, router))
+		
+		# Else ignore key
+		else:
+			pass
+	
+#############	
+
+
+
+def ChangeHostname(router, new_name):
+	"""Change hostname for router"""
+
+	# Change router name in  data base
+	DataBase.Update("UPDATE inventory SET router='{0}' WHERE router='{1}'".format(new_name,router))
+	
+	# Use one of commands below. Git preferred. One that won't work will fail silently
+	call(['git', '-C', 'inventory', 'mv', router, new_name], stdout=DEVNULL, stderr=DEVNULL)
+	call(["mv", "inventory/"+router, "inventory/"+new_name], timeout=3)
+	
+#############	
+	
+	
+def ListRouters():
+	"""Generate json dump of routers"""
+	
+	# Create empty list
+	info = []
+	
+	# Get list of router names
+	list = DataBase.FetchAll("SELECT router FROM inventory")
+	
+	#For each name. Query data base. Append result(dictionary) to list
+	for i in list:
+		info.append(DataBase.Info(i[0])[0])
+	print(json.dumps((info), sort_keys=True, indent=4))
+	
+	# TO DO: improve formatting
+	
+	
+#############
+
+	
+	
+def Setup():
+	"""Setup mtrcbackup for first time"""
+
+	# Check if ".setup" file exists. If not proceed.
+	if not os.path.isfile('.setup'):
+		
+		# Create router inventory dir 
+		call(["mkdir", "inventory"], stdout=DEVNULL, stderr=DEVNULL)
+		
+		# Create database schema
+		DataBase.Update('''CREATE TABLE inventory(router TEXT PRIMARY KEY, user TEXT, passwd TEXT, usekey INTEGER check("usekey" in (0, 1)), interval TEXT check("interval" in ('hourly', 'daily', 'weekly', 'monthly')), sshport INTEGER check("sshport" BETWEEN 0 AND 65536), arch TEXT, board TEXT)''')
+		
+		# Set up cron for automatic backups
+		SetupCron()
+		
+		# Init git repo in inventory dir
+		call(['git', '-C', 'inventory', 'init'], stdout=DEVNULL, stderr=DEVNULL)
+		
+		# Touch ".setup" file to mark that setup has been completed
+		open('.setup', 'a').close()
+	
+	# Else ".setup" file exists so setup has been run before
+	else:
+		Syslog.Warning('Looks like setup is done. If you wish to re-run delete .setup file')
+
+	# TO DO: include rollback if setup fails at any point	 
+	
+	
+	
+#############
+
+def SetupCron():
+	"""# Create crontab for user running setup"""
+
+	users_cron    = CronTab(user=True)
+	users_cron.remove_all(command=pwdir+sys.argv[0].strip('.')+' --auto hourly')
+	job  = users_cron.new(command=pwdir+sys.argv[0].strip('.')+' --auto hourly')
+	job.every().hour()
+	users_cron.remove_all(command=pwdir+sys.argv[0].strip('.')+' --auto daily')
+	job  = users_cron.new(command=pwdir+sys.argv[0].strip('.')+' --auto daily')
+	job.every().day()
+	users_cron.remove_all(command=pwdir+sys.argv[0].strip('.')+' --auto weekly')
+	job  = users_cron.new(command=pwdir+sys.argv[0].strip('.')+' --auto weekly')
+	job.dow.on('SUN')
+	users_cron.remove_all(command=pwdir+sys.argv[0].strip('.')+' --auto monthly')
+	job  = users_cron.new(command=pwdir+sys.argv[0].strip('.')+' --auto monthly')
+	job.every().month()
+	users_cron.write_to_user(user=True)
+	
+#############
+
+def AutoBackup(freq):
+	"""Execute backups automatically based on interval(freq) passed as arg"""
+	
+	# Check if interval(freq) valid
+	if freq in ['hourly', 'daily', 'weekly', 'monthly']:
+		
+		# Select all router names where router has corresponding freq
+		all_rows = DataBase.FetchAll("SELECT router FROM inventory WHERE interval='{0}'".format(freq))
+		
+		# Try each router
+		for i in all_rows:
+		
+			# Set router subclass depending on usekey=0|1 to key/ssh or sshpass 
+			condition = DataBase.Info(i[0])[0]
+			new_router = SSHConn(condition) if condition['usekey'] == 1 else SSHPass(condition)
+			
+			# Try backup
+			try:
+				new_router.RunBackup()
+			
+			# If router does not respond instead of except write to log and continue with loop
+			except:
+				Syslog.Warning(i[0]+"::Auto backup fail")
+	
+###########################################################################################################
+		
+# MAIN
+
+# If run from command line:
+if __name__=="__main__":
+	
+	import os.path, glob, sqlite3, sys, getopt, re, time, json, syslog
+	from subprocess import call, DEVNULL, check_output
+	from crontab import CronTab
+	
+	# Get present working directory.  Useful for cron
+	pwdir = check_output(["pwd"]).strip().decode()
+	
+	#######
+	#
+	#CLI
+	########
+
+	# cli
+	try:
+		opts, args = getopt.getopt(sys.argv[1:], 'hacbel', ['help', 'add', 'setup', 'delete', 'change', 'backup', 'auto', 'edit', 'list', 'check','license'])
+		
+		# Check if any options passed at all. If not except will be triggered
+		assert sys.argv[1]
+		
+	except:
+		print(__doc__)
+		raise SystemExit(2)
+	
+	# init database object to access data
+	DataBase = DataBase()
+	
+	# init syslog object to log and print on screen
+	Syslog = Syslog()
+	
+	for opt, arg in opts:
+		
+		if opt in ('-h', '--help'):
+			print(__doc__)
+
+		# Add router
+		elif opt in ('-a', '--add'):
+			
+			# Create dictionary from all args passed. user=ed => {'user':'ed'}
+			parameters = dict([arg.split('=', maxsplit=1) for arg in args[0:]])
+			AddRouter(**parameters)
+				
+		# Delete router
+		elif opt in ('--delete'):
+			DeleteRouter(args[0])
+
+		# Change hostname
+		elif opt in ('-c', '--change'):
+			ChangeHostname(args[0], args[1])
+			
+		# Edit router settings
+		elif opt in ('-e', '--edit'):
+		
+			# Create dictionary from all args passed. user=ed => {'user':'ed'}		
+			parameters = dict([arg.split('=', maxsplit=1) for arg in args[0:]])
+			EditRouter(**parameters)
+			
+		# Get JSON listing from database
+		elif opt in ('-l', '--list'):
+			ListRouters()
+			
+		# Call setup
+		elif opt in ('--setup'):
+			Setup()
+
+		# Run auto backup
+		elif opt in ('--auto'):
+			AutoBackup(args[0])
+
+		# Run manual backup
+		elif opt in ('-b', '--backup'):
+		
+			# Set router subclass depending on usekey=0|1 to key/ssh or sshpass 
+			condition = DataBase.Info(args[0])[0]
+			new_router = SSHConn(condition) if condition['usekey'] == 1 else SSHPass(condition)
+			new_router.RunBackup()
+
+		# Check if router responds to ssh
+		elif opt in ('--check'):
+		
+			# Set router subclass depending on usekey=0|1 to key/ssh or sshpass 		
+			condition = DataBase.Info(args[0])[0]
+			new_router = SSHConn(condition) if condition['usekey'] == 1 else SSHPass(condition)
+			print(new_router.CheckRouter())
+
+		# Back up license
+		elif opt in ('--license'):
+		
+			# Set router subclass depending on usekey=0|1 to key/ssh or sshpass 		
+			condition = DataBase.Info(args[0])[0]
+			new_router = SSHConn(condition) if condition['usekey'] == 1 else SSHPass(condition)
+			new_router.License()
+
+		else:
+			print(__doc__)
+			raise SystemExit(2)

@@ -1,0 +1,41 @@
+##Install Instructions for CentOS 7
+Tested on :CentOS Linux release 7.1(Core) with Python 3.3.2
+
+Run commands as su:
+```
+yum -y install scl-utils
+rpm -Uvh https://www.softwarecollections.org/en/scls/rhscl/python33/epel-7-x86_64/download/rhscl-python33-epel-7-x86_64.noarch.rpm
+yum -y install python33
+scl enable python33 bash
+easy_install pip
+pip3 install python-crontab
+yum -y install epel-release
+yum --enablerepo=epel -y install sshpass
+```
+
+If you encounter error :
+```
+python3: error while loading shared libraries: libpython3.3m.so.1.0: cannot open shared object file: No such file or directory
+```
+append "/opt/rh/python33/root/usr/lib64/" to "/etc/ld.so.conf"
+
+and run command:
+```
+ldconfig
+```
+
+download mtrcbackup.py
+
+chmod 775 mtrcbackup.py
+./mtrcbackup.py -s
+
+
+Also tested on:
+
+Linux Mint 17 Qiana with Python 3.4.3
+
+install:
+
+pip3
+python-crontab
+sshpass

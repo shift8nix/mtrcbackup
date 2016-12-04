@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+
+
+# Quick and dirty testing if menu options
+##############################################################################################################
+def Test1():
+	_test1 = "--setup program"
+	xport.write("\n############\n"+_test1+"\n##\n")
+	
+	# Run --setup
+	xport.write("Run $"+prog+" --setup\n")
+	try:
+		_a = check_output([prog, '--setup'], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if not 'Looks like setup is done.' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+	
+	# Check if files created
+	_files = ('.setup', 'inventory', 'database.sqlite')
+	xport.write("verify files"+str(_files)+" created\n")
+	try:
+		for i in _files:
+			xport.write(i+'\n::PASS\n' if os.path.exists(i) else i+'\n::FAIL\n')
+	except:
+		xport.write('::FAIL')
+		pass
+	
+	# Rerun test to find
+	xport.write("Re - Run $"+prog+" --setup\n")
+	try:
+		_a = check_output([prog, '--setup'], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if 'Looks like setup is done.' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+##############################################################################################################
+def Test2():
+	_test = "--add router=10.0.0.1 user=bobo "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("Run add the query\n")
+	try:
+		_a = check_output([prog, '--add', 'router=10.0.0.1',  'user=bobo'], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if not 'Removed from DataBase' in _a else '::FAIL\n')
+		_a = check_output([prog, "-l"], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if 'bobo' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+
+
+##############################################################################################################
+def Test3():
+	_test = "-e router=10.0.0.1 user=bobo "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("Run edit\n")
+	try:
+		_a = check_output([prog, '-e', 'router=10.0.0.1',  'user=admin', 'passwd=passwd123'], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		_a = check_output([prog, "-l"], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if 'passwd123' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+
+
+##############################################################################################################		
+def Test4():
+	_test = "--change 10.0.0.1 10.0.0.2 "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("cjange hostname\n")
+	try:
+		_a = check_output([prog, '--change', '10.0.0.1',  '10.0.0.2'], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		_a = check_output([prog, "-l"], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if '10.0.0.2' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+##############################################################################################################
+def Test5():
+	_test = "--check 10.0.0.2 "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("check host\n")
+	try:
+		_a = check_output([prog, '--check', '10.0.0.2'], stderr=STDOUT).decode().strip()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if  _a == '0' else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+
+
+##############################################################################################################
+def Test6():
+	_test = "--license 10.0.0.2 "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("check if license is being saved\n")
+	try:
+		_a = check_output([prog, '--license', '10.0.0.2'], stderr=STDOUT).decode().strip()
+		xport.write("> "+_a+"\ninventory/10.0.0.2/MRJQ-ZW7F.key\n")
+		xport.write('::PASS\n' if os.path.exists('inventory/10.0.0.2/MRJQ-ZW7F.key') else '::FAIL\n')
+	
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+
+##############################################################################################################		
+def Test7():
+	_test = "--backup 10.0.0.2 "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("first backup\n")
+	try:
+
+		_a = check_output([prog, "--backup", "10.0.0.2"], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if 'New config backup' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+
+
+##############################################################################################################		
+def Test8():
+	_test = "--auto hourly "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("auto backup\n")
+	try:
+
+		_a = check_output([prog, "--auto", "hourly"], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if 'No changes to config' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+
+##############################################################################################################
+
+def Test9():
+	_test = "--delete  10.0.0.2 "
+	xport.write("\n############\n"+_test+"\n##\n")
+	
+
+	xport.write("delete host\n")
+	try:
+		_a = check_output([prog, '--delete', '10.0.0.2'], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		_a = check_output([prog, "-l"], stderr=STDOUT).decode()
+		xport.write("> "+_a+"\n")
+		xport.write('::PASS\n' if not '10.0.0.2' in _a else '::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL\n')
+		pass
+
+##############################################################################################################
+def Rem_Test1():
+	_test = 'remove --setup files/dirs'
+	xport.write("\n############\n"+_test+"\n##\n")
+	files = ('.setup', 'inventory', 'database.sqlite')
+	try:
+		for i in files:
+			xport.write("Remove "+i+'\n::PASS\n' if call(['rm', '-Rf', i],stdout=xport, stderr=STDOUT) == 0 else "Remove "+i+'\n::FAIL\n')
+	except Exception as e:
+		xport.write("\n"+str(e)+"\n")
+		xport.write('::FAIL')
+		pass
+
+##############################################################################################################
+def Results():
+	"""Add results total to report"""
+
+	xport.seek(0, 0)
+	contents = xport.read()    
+	_pass = contents.count("::PASS")
+	_fail = contents.count("::FAIL")
+	_total = _pass + _fail
+	xport.write("\n\nTotal "+str(_total)+" tests run.\n::PASS = "+str(_pass)+"\n::FAIL = "+str(_fail)+"\n")
+	if _fail == 0:
+		xport.write("Result: PASS\n")
+		sys.exit(0)
+	else:
+		xport.write("Result: PASS\n")
+		sys.exit(99)
+
+##############################################################################################################
+
+if __name__=="__main__":
+	import os.path, glob, sqlite3, sys, os
+	from subprocess import call, DEVNULL, check_output, STDOUT
+	#vars
+	prog = "./"+sys.argv[1]
+	report = "report.txt"
+	print("Testing "+prog)
+	call(['mv', report, report+".old"])
+	xport = open(report, 'a+')
+	
+	# Run tests
+	try:
+		Test1()
+		Test2()
+		Test3()
+		Test4()
+		Test5()
+		Test6()
+		Test7()
+		Test8()
+		Test9()
+		Rem_Test1()
+		Results()
+	except Exception as e:
+		xport.write("\n"+str(e)+str()++"\n")
+		xport.write('::FAIL\n')
+		pass
